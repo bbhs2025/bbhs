@@ -1,0 +1,1025 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>아기 문어의 모험</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #2c3e50; /* Dark background behind the game area */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            touch-action: none; /* Prevent default touch actions like zooming or scrolling */
+            font-family: 'Inter', sans-serif;
+            overflow: hidden;
+        }
+
+        #game-container {
+            position: relative;
+            width: 100%;
+            max-width: 480px; /* Mobile friendly max width */
+            height: 100vh;
+            max-height: 800px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            background-color: #2eb5e5; /* Warm tropical ocean blue */
+            overflow: hidden;
+        }
+
+        /* Responsive canvas sizing */
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            pointer-events: none; /* Let clicks pass through to the canvas */
+            text-align: center;
+        }
+
+        #score-display {
+            position: absolute;
+            top: 10%;
+            left: 50%;
+            transform: translateX(-50%);
+            transition: transform 0.1s ease-out; /* 점수 획득 시 팝업 애니메이션을 위한 트랜지션 */
+            font-size: 4rem;
+            font-weight: bold;
+            color: white;
+            text-shadow: 3px 3px 0 #000, -3px -3px 0 #000, 3px -3px 0 #000, -3px 3px 0 #000;
+            z-index: 10;
+            display: none; /* Hidden by default */
+        }
+
+        #start-screen, #game-over-screen {
+            background-color: rgba(0, 0, 0, 0.4);
+            z-index: 20;
+            pointer-events: auto; /* Catch clicks to start/restart */
+        }
+
+        .title-text {
+            font-size: 3.5rem;
+            font-weight: 900;
+            color: #FFD700; /* Yellow */
+            text-shadow: 3px 3px 0 #D2691E, -1px -1px 0 #D2691E, 1px -1px 0 #D2691E, -1px 1px 0 #D2691E;
+            margin-bottom: 1rem;
+            letter-spacing: 2px;
+        }
+
+        .instruction-text {
+            font-size: 1.25rem;
+            color: white;
+            background-color: #e74c3c;
+            padding: 10px 20px;
+            border-radius: 8px;
+            border: 3px solid #c0392b;
+            cursor: pointer;
+            animation: pulse 1.5s infinite;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+
+        #game-over-screen .score-board {
+            background: #f1c40f;
+            padding: 20px 40px;
+            border-radius: 10px;
+            border: 4px solid #f39c12;
+            margin-bottom: 20px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+        }
+
+        .score-board h2 {
+            margin: 0;
+            color: #d35400;
+            font-size: 2rem;
+            font-weight: bold;
+        }
+
+        .score-board p {
+            margin: 10px 0 0;
+            font-size: 3rem;
+            color: white;
+            text-shadow: 2px 2px 0 #000, -1px -1px 0 #000;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <!-- The Game Canvas -->
+        <canvas id="gameCanvas"></canvas>
+
+        <!-- Ongoing Score Display -->
+        <div id="score-display">0</div>
+
+        <!-- Start Screen -->
+        <div id="start-screen" class="ui-layer">
+            <h1 class="title-text">아기 문어의 모험</h1>
+            <div class="instruction-text">클릭해서 시작</div>
+        </div>
+
+        <!-- Game Over Screen -->
+        <div id="game-over-screen" class="ui-layer" style="display: none;">
+            <div class="score-board">
+                <h2>게임 오버</h2>
+                <p id="final-score">0</p>
+            </div>
+            <div class="instruction-text">다시하기</div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const startScreen = document.getElementById('start-screen');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const scoreDisplay = document.getElementById('score-display');
+        const finalScoreDisplay = document.getElementById('final-score');
+
+        // Game Configuration
+        const FPS = 60;
+        let animationId;
+        
+        // Logical resolution (independent of actual screen size)
+        const LOGICAL_WIDTH = 400;
+        const LOGICAL_HEIGHT = 600;
+        
+        // Ground height (바닥 제거를 위해 0으로 설정)
+        const GROUND_HEIGHT = 0;
+
+        // Game State Enum
+        const STATE_START = 0;
+        const STATE_PLAYING = 1;
+        const STATE_GAMEOVER = 2;
+        let currentState = STATE_START;
+
+        let score = 0;
+        let frames = 0;
+        let deathCause = null; // 죽은 이유를 저장하는 변수 추가
+
+        const bird = {
+            x: 100,
+            y: LOGICAL_HEIGHT / 2,
+            radius: 20, // 캐릭터 크기 약간 증가
+            velocity: 0,
+            gravity: 0.5,
+            jumpForce: -8,
+            isEaten: false, // 먹혔는지 여부 확인
+            
+            draw: function() {
+                if (this.isEaten) return; // 먹히면 그리지 않음
+
+                ctx.save();
+                
+                let rotation = 0;
+                if (this.velocity > 0) {
+                    rotation = Math.min(Math.PI / 4, this.velocity * 0.05);
+                } else if (this.velocity < 0) {
+                    rotation = -Math.PI / 6;
+                }
+                
+                ctx.translate(this.x, this.y);
+                ctx.rotate(rotation);
+                
+                // --- 이미지 기반 문어 그리기 시작 ---
+                
+                const numLegs = 5;
+                const spacing = 7;
+                const startX = -14;
+                const legRadius = 6.5;
+                
+                // 1 & 2. 몸통과 다리의 전체 실루엣(검은 테두리)을 굵게 먼저 그리기
+                // 겹치는 부분의 안쪽 선을 없애기 위해 검은색으로 전체 형태를 잡습니다.
+                ctx.fillStyle = '#000000';
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 5; // 뚜렷한 테두리를 위해 두께 설정
+                ctx.lineJoin = 'round';
+                
+                // 다리 실루엣 그리기
+                for (let i = 0; i < numLegs; i++) {
+                    const legX = startX + i * spacing;
+                    // 프레임에 따라 위아래로 뽈뽈거리며 움직이는 애니메이션
+                    const legY = 16 + Math.sin(frames * 0.15 + i * 1.2) * 2.5; 
+                    ctx.beginPath();
+                    ctx.arc(legX, legY, legRadius, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+                }
+                
+                // 몸통 실루엣 그리기
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+
+                // 3. 내부를 분홍색으로 채워서 안쪽 겹치는 검은선 지우기
+                ctx.fillStyle = '#eb5d7f';
+                ctx.strokeStyle = '#eb5d7f';
+                ctx.lineWidth = 1; // 픽셀 경계선 부드럽게 처리용 얇은 선
+                
+                // 다리 내부 채우기
+                for (let i = 0; i < numLegs; i++) {
+                    const legX = startX + i * spacing;
+                    const legY = 16 + Math.sin(frames * 0.15 + i * 1.2) * 2.5;
+                    ctx.beginPath();
+                    ctx.arc(legX, legY, legRadius, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+                }
+                
+                // 몸통 내부 채우기
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+
+                // 4. 진한 핑크색 볼터치
+                ctx.fill();
+
+                ctx.fillStyle = '#FFFFFF';
+                ctx.beginPath();
+                ctx.arc(-8, -4, 1, 0, Math.PI * 2);
+                ctx.arc(6, -4, 1, 0, Math.PI * 2);
+                ctx.fill();
+
+                // 5. 입 (가운데 작은 동그라미)
+                ctx.fillStyle = '#ffb3c6';
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 1.5;
+                
+                ctx.beginPath();
+                ctx.arc(0, -1, 3.5, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+                
+                ctx.fillStyle = '#000000';
+                ctx.beginPath();
+                ctx.arc(0, -1, 1, 0, Math.PI * 2);
+                ctx.fill();
+
+                // --- 이미지 기반 문어 그리기 끝 ---
+
+                ctx.restore();
+            },
+            
+            update: function() {
+                // Apply gravity
+                this.velocity += this.gravity;
+                this.y += this.velocity;
+                
+                // Floor Collision
+                if (this.y + this.radius >= LOGICAL_HEIGHT - GROUND_HEIGHT) {
+                    // 바닥에 부딪히면 멈추지 않고 추락하도록 설정 변경
+                    setGameOver('floor');
+                }
+                
+                // Ceiling Collision (Optional: prevent flying over pipes entirely)
+                if (this.y - this.radius <= 0) {
+                    this.y = this.radius;
+                    this.velocity = 0;
+                }
+            },
+            
+            jump: function() {
+                this.velocity = this.jumpForce;
+            },
+            
+            reset: function() {
+                this.y = LOGICAL_HEIGHT / 2;
+                this.velocity = 0;
+                this.isEaten = false;
+            }
+        };
+
+        const shark = {
+            active: false,
+            isFinished: false,
+            x: -250,
+            y: 0,
+            speed: 8,
+            jawOpenProgress: 1.0,
+
+            reset: function() {
+                this.active = false;
+                this.isFinished = false;
+                this.x = -250;
+                this.jawOpenProgress = 1.0;
+                this.speed = 8;
+            },
+
+            update: function() {
+                if (!this.active) return;
+                
+                this.x += this.speed;
+
+                if (!bird.isEaten) {
+                    // 상어가 아기 문어의 Y 위치를 따라가며 부드럽게 조준
+                    this.y += (bird.y - this.y) * 0.08;
+                    
+                    let sharkMouthX = this.x + 80; // 스케일(1.5)이 적용된 입의 대략적인 X 위치
+                    if (sharkMouthX >= bird.x) {
+                        bird.isEaten = true;
+                        this.speed = 12; // 먹고 나서 속도를 올려 빠르게 지나감
+                    }
+                } else {
+                    // 먹은 후 입을 빠르게 닫음
+                    if (this.jawOpenProgress > 0) {
+                        this.jawOpenProgress -= 0.15;
+                        if (this.jawOpenProgress < 0) this.jawOpenProgress = 0;
+                    }
+                    // 수평으로 유유히 헤엄침
+                    this.y += (LOGICAL_HEIGHT / 2 - this.y) * 0.02;
+                }
+
+                // 상어가 화면을 완전히 벗어나면 애니메이션 종료 판정
+                if (this.x > LOGICAL_WIDTH + 200) {
+                    this.isFinished = true;
+                }
+            },
+
+            draw: function() {
+                if (!this.active) return;
+                
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.scale(1.5, 1.5); // 상어를 위협적으로 크게 만듦
+
+                let tailWag = Math.sin(frames * 0.3) * 12;
+                let jaw = this.jawOpenProgress;
+                let lowerJawX = 65 - 15 * jaw;
+                let lowerJawY = 5 + 35 * jaw;
+
+                // 1. 뒤쪽 가슴지느러미 (어두운 색)
+                ctx.fillStyle = '#2b5066';
+                ctx.beginPath();
+                ctx.moveTo(20, 25);
+                ctx.quadraticCurveTo(30, 45, 10, 60);
+                ctx.quadraticCurveTo(15, 40, 5, 25);
+                ctx.fill();
+
+                // 2. 등지느러미
+                ctx.fillStyle = '#41728f';
+                ctx.beginPath();
+                ctx.moveTo(5, -30);
+                ctx.quadraticCurveTo(-5, -70, -25, -75);
+                ctx.quadraticCurveTo(-15, -40, -20, -32);
+                ctx.fill();
+
+                // 3. 꼬리지느러미 (꼬리치는 애니메이션 적용)
+                ctx.beginPath();
+                ctx.moveTo(-45, 0);
+                ctx.lineTo(-90, -35 + tailWag);
+                ctx.lineTo(-80, 0 + tailWag);
+                ctx.lineTo(-90, 35 + tailWag);
+                ctx.fill();
+
+                // 4. 입 안쪽 어두운 배경 (벌린 틈새로 보이게 됨)
+                ctx.fillStyle = '#152233';
+                ctx.beginPath();
+                ctx.moveTo(25, 15); // 입꼬리 깊숙한 곳
+                ctx.lineTo(65, 5);  // 윗입술
+                ctx.lineTo(lowerJawX, lowerJawY); // 아랫입술
+                ctx.fill();
+
+                // 5. 상어 메인 몸통 (입이 벌어지는 형태를 따라 테두리를 그림)
+                ctx.fillStyle = '#41728f';
+                ctx.beginPath();
+                ctx.moveTo(75, -5); // 코
+                ctx.lineTo(65, 5);  // 윗입술
+                ctx.lineTo(25, 15); // 입꼬리 (안쪽으로 푹 들어감)
+                ctx.lineTo(lowerJawX, lowerJawY); // 아랫입술 (턱 움직임 애니메이션)
+                ctx.quadraticCurveTo(10, 45, -50, 5); // 배
+                ctx.quadraticCurveTo(-20, -45, 30, -35); // 등
+                ctx.quadraticCurveTo(60, -25, 75, -5); // 머리
+                ctx.fill();
+
+                // 6. 밝은 배 부분
+                ctx.fillStyle = '#a6c4d1';
+                ctx.beginPath();
+                ctx.moveTo(25, 15);
+                ctx.lineTo(lowerJawX, lowerJawY);
+                ctx.quadraticCurveTo(10, 45, -40, 10); 
+                ctx.quadraticCurveTo(0, 30, 25, 15); 
+                ctx.fill();
+
+                // 7. 아랫니
+                ctx.fillStyle = '#FFFFFF';
+                ctx.beginPath();
+                ctx.moveTo(lowerJawX, lowerJawY);
+                let dxL = 25 - lowerJawX;
+                let dyL = 15 - lowerJawY;
+                for(let i=1; i<=4; i++) {
+                    let t = i / 4;
+                    let t_prev = (i - 0.5) / 4;
+                    ctx.lineTo(lowerJawX + dxL * t_prev - 4, lowerJawY + dyL * t_prev - 6); 
+                    ctx.lineTo(lowerJawX + dxL * t, lowerJawY + dyL * t);
+                }
+                ctx.fill();
+
+                // 8. 윗니
+                ctx.beginPath();
+                ctx.moveTo(65, 5);
+                let dxU = 25 - 65;
+                let dyU = 15 - 5;
+                for(let i=1; i<=4; i++) {
+                    let t = i / 4;
+                    let t_prev = (i - 0.5) / 4;
+                    ctx.lineTo(65 + dxU * t_prev + 2, 5 + dyU * t_prev + 7); 
+                    ctx.lineTo(65 + dxU * t, 5 + dyU * t);
+                }
+                ctx.fill();
+
+                // 9. 앞쪽 가슴지느러미
+                ctx.fillStyle = '#3a6682';
+                ctx.beginPath();
+                ctx.moveTo(5, 30);
+                ctx.quadraticCurveTo(20, 60, -10, 85);
+                ctx.quadraticCurveTo(0, 50, -15, 25);
+                ctx.fill();
+                ctx.strokeStyle = '#2b5066';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+
+                // 10. 눈
+                ctx.fillStyle = '#000000';
+                ctx.beginPath();
+                ctx.arc(45, -10, 3.5, 0, Math.PI*2);
+                ctx.fill();
+                ctx.fillStyle = '#FFFFFF';
+                ctx.beginPath();
+                ctx.arc(46, -11, 1.2, 0, Math.PI*2);
+                ctx.fill();
+
+                // 11. 아가미
+                ctx.strokeStyle = '#2b5066';
+                ctx.lineWidth = 2;
+                ctx.lineCap = 'round';
+                for(let i=0; i<3; i++) {
+                    ctx.beginPath();
+                    ctx.moveTo(15 + i*5, -2 + i*2);
+                    ctx.quadraticCurveTo(10 + i*5, 8 + i*2, 15 + i*5, 18 + i*2);
+                    ctx.stroke();
+                }
+
+                ctx.restore();
+            }
+        };
+
+        const pipes = {
+            items: [],
+            width: 60,
+            gap: 160, // Space between top and bottom pipe
+            dx: 3, // Horizontal movement speed
+            spawnDistance: 300, // 기둥 생성 간격을 추적하기 위한 변수 추가
+            
+            // 새우 그리기 함수 (귀여운 카툰 칵테일 새우 스타일)
+            drawShrimp: function(ctx) {
+                ctx.save();
+                
+                // 공통 테두리 및 라인 스타일
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = '#801d28'; // 선명한 다크 버건디 테두리
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+
+                // 1. 꼬리지느러미 (아래쪽 오른쪽 방향의 부채꼴 2갈래 지느러미)
+                ctx.fillStyle = '#ff4757';
+                
+                // 위쪽 꼬리 깃
+                ctx.beginPath();
+                ctx.moveTo(8, 8);
+                ctx.quadraticCurveTo(22, 5, 20, 16);
+                ctx.quadraticCurveTo(13, 14, 8, 8);
+                ctx.fill();
+                ctx.stroke();
+
+                // 아래쪽 꼬리 깃
+                ctx.beginPath();
+                ctx.moveTo(8, 8);
+                ctx.quadraticCurveTo(16, 22, 8, 20);
+                ctx.quadraticCurveTo(6, 14, 8, 8);
+                ctx.fill();
+                ctx.stroke();
+
+                // 2. 몸통 구부러진 껍질 마디들 (꼬리 -> 중앙 -> 머리)
+                // [마디 3: 꼬리와 연결되는 하단 마디]
+                ctx.fillStyle = '#ff6b81';
+                ctx.beginPath();
+                ctx.ellipse(6, 6, 7, 5.5, Math.PI / 4, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+
+                // [마디 2: 중앙의 가장 도톰한 마디]
+                ctx.fillStyle = '#ff7f50';
+                ctx.beginPath();
+                ctx.ellipse(1, -1, 9, 7.5, -Math.PI / 8, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+
+                // 마디 껍질 결 디테일 선
+                ctx.beginPath();
+                ctx.arc(1, -1, 8, -Math.PI * 0.7, Math.PI * 0.25);
+                ctx.stroke();
+
+                // [마디 1: 머리와 이어지는 상단 마디]
+                ctx.fillStyle = '#ff6b6b';
+                ctx.beginPath();
+                ctx.ellipse(-6, -4, 9.5, 8, -Math.PI / 6, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+
+                // 3. 머리 (왼쪽을 향하는 유선형 헤드)
+                ctx.fillStyle = '#ff7f50';
+                ctx.beginPath();
+                ctx.moveTo(-4, 3);
+                ctx.quadraticCurveTo(-15, 4, -22, -4); // 주둥이 끝
+                ctx.quadraticCurveTo(-14, -14, -2, -10); // 정수리
+                ctx.quadraticCurveTo(2, -3, -4, 3);
+                ctx.fill();
+                ctx.stroke();
+
+                // 4. 등 껍질의 반짝이는 하이라이트 (윤기 표현)
+                ctx.fillStyle = '#fff0f3';
+                ctx.beginPath();
+                ctx.ellipse(-12, -8, 4, 1.8, -Math.PI / 4, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.beginPath();
+                ctx.ellipse(-1, -6, 3, 1.5, -Math.PI / 6, 0, Math.PI * 2);
+                ctx.fill();
+
+                // 5. 까만 눈과 하이라이트점
+                ctx.fillStyle = '#222222';
+                ctx.beginPath();
+                ctx.arc(-14, -3, 2.5, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.fillStyle = '#ffffff';
+                ctx.beginPath();
+                ctx.arc(-15, -4, 1, 0, Math.PI * 2);
+                ctx.fill();
+
+                // 6. 볼터치
+                ctx.fillStyle = 'rgba(255, 71, 87, 0.6)';
+                ctx.beginPath();
+                ctx.arc(-10, 1, 2.5, 0, Math.PI * 2);
+                ctx.fill();
+
+                // 7. 더듬이 (위쪽과 뒤쪽으로 부드럽게 곡선을 그리며 펼쳐짐)
+                ctx.strokeStyle = '#ff6b81';
+                ctx.lineWidth = 2;
+                
+                // 긴 더듬이
+                ctx.beginPath();
+                ctx.moveTo(-20, -5);
+                ctx.quadraticCurveTo(-30, -18, -20, -25);
+                ctx.stroke();
+
+                // 짧은 더듬이
+                ctx.beginPath();
+                ctx.moveTo(-20, -5);
+                ctx.quadraticCurveTo(-32, -10, -30, -18);
+                ctx.stroke();
+
+                ctx.restore();
+            },
+
+            drawCoral: function(ctx) {
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                
+                // Main trunk (중앙 기둥)
+                ctx.strokeStyle = '#ffb3c6'; // 이미지와 비슷한 화사한 분홍색
+                ctx.lineWidth = 16;
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(2, -20);
+                ctx.lineTo(0, -45);
+                ctx.stroke();
+
+                // Branch 1 (왼쪽 가지)
+                ctx.lineWidth = 12;
+                ctx.beginPath();
+                ctx.moveTo(1, -12);
+                ctx.lineTo(-18, -25);
+                ctx.lineTo(-22, -38);
+                ctx.stroke();
+
+                // Branch 2 (오른쪽 가지)
+                ctx.lineWidth = 12;
+                ctx.beginPath();
+                ctx.moveTo(1, -15);
+                ctx.lineTo(18, -30);
+                ctx.lineTo(25, -42);
+                ctx.stroke();
+                
+                // Branch 3 (왼쪽 작은 가지)
+                ctx.lineWidth = 8;
+                ctx.beginPath();
+                ctx.moveTo(-10, -18);
+                ctx.lineTo(-28, -15);
+                ctx.stroke();
+
+                // Branch 4 (오른쪽 작은 가지)
+                ctx.lineWidth = 8;
+                ctx.beginPath();
+                ctx.moveTo(10, -22);
+                ctx.lineTo(28, -25);
+                ctx.stroke();
+
+                // Small details/spots (산호초 무늬 디테일)
+                ctx.fillStyle = '#e57a9b';
+                ctx.beginPath();
+                ctx.arc(0, -10, 2.5, 0, Math.PI*2);
+                ctx.arc(-12, -25, 2, 0, Math.PI*2);
+                ctx.arc(15, -30, 2.5, 0, Math.PI*2);
+                ctx.arc(4, -35, 2, 0, Math.PI*2);
+                ctx.arc(-20, -15, 1.5, 0, Math.PI*2);
+                ctx.arc(22, -25, 1.5, 0, Math.PI*2);
+                ctx.fill();
+            },
+
+            draw: function() {
+                const CORAL_HEIGHT = 45;
+
+                for (let i = 0; i < this.items.length; i++) {
+                    let p = this.items[i];
+                    
+                    // --- Top Obstacle (위쪽 바위와 산호초) ---
+                    let topRockHeight = Math.max(0, p.top - CORAL_HEIGHT);
+                    
+                    // Draw Rock Body
+                    ctx.fillStyle = '#4a4e69'; // 심해의 어두운 바위 색상
+                    ctx.fillRect(p.x, 0, this.width, topRockHeight);
+                    ctx.strokeStyle = '#22223b';
+                    ctx.lineWidth = 4;
+                    ctx.strokeRect(p.x, 0, this.width, topRockHeight);
+                    
+                    // Add simple texture to rock
+                    ctx.fillStyle = '#3a3d52';
+                    ctx.fillRect(p.x + 10, topRockHeight * 0.2, 15, 15);
+                    ctx.fillRect(p.x + 35, topRockHeight * 0.6, 12, 12);
+                    ctx.fillRect(p.x + 20, topRockHeight * 0.8, 10, 8);
+
+                    // Draw Top Coral (거꾸로 매달린 산호초)
+                    ctx.save();
+                    ctx.translate(p.x + this.width / 2, topRockHeight);
+                    ctx.scale(1, -1); // 산호초를 아래를 향하도록 뒤집기
+                    this.drawCoral(ctx);
+                    ctx.restore();
+                    
+                    // --- Bottom Obstacle (아래쪽 바위와 산호초) ---
+                    let bottomY = p.top + this.gap;
+                    let bottomHeight = (LOGICAL_HEIGHT - GROUND_HEIGHT) - bottomY;
+                    let bottomRockY = bottomY + CORAL_HEIGHT;
+                    let bottomRockHeight = Math.max(0, bottomHeight - CORAL_HEIGHT);
+                    
+                    // Draw Rock Body
+                    ctx.fillStyle = '#4a4e69';
+                    ctx.fillRect(p.x, bottomRockY, this.width, bottomRockHeight);
+                    ctx.strokeStyle = '#22223b';
+                    ctx.lineWidth = 4;
+                    ctx.strokeRect(p.x, bottomRockY, this.width, bottomRockHeight);
+                    
+                    // Add simple texture to rock
+                    ctx.fillStyle = '#3a3d52';
+                    ctx.fillRect(p.x + 15, bottomRockY + bottomRockHeight * 0.1, 20, 15);
+                    ctx.fillRect(p.x + 30, bottomRockY + bottomRockHeight * 0.5, 15, 12);
+                    ctx.fillRect(p.x + 10, bottomRockY + bottomRockHeight * 0.8, 12, 10);
+
+                    // Draw Bottom Coral (위로 자라난 산호초)
+                    ctx.save();
+                    ctx.translate(p.x + this.width / 2, bottomRockY);
+                    this.drawCoral(ctx);
+                    ctx.restore();
+
+                    // --- Draw Shrimp (가운데 둥둥 떠다니는 새우) ---
+                    if (!p.shrimpEaten) {
+                        ctx.save();
+                        // 프레임에 따라 약간씩 위아래로 둥둥 떠다니게 애니메이션 적용
+                        p.shrimpY = p.top + (this.gap / 2) + Math.sin(frames * 0.05 + i) * 8; 
+                        ctx.translate(p.x + this.width / 2, p.shrimpY);
+                        this.drawShrimp(ctx);
+                        ctx.restore();
+                    }
+                }
+            },
+
+            update: function() {
+                // 시간이 지날수록 점진적으로 장애물 이동 속도 증가 (최대 속도 7로 제한)
+                if (this.dx < 7) {
+                    this.dx += 0.0015;
+                }
+                
+                // 이동 거리를 누적
+                this.spawnDistance += this.dx;
+
+                // 속도가 빨라져도 기둥 간의 물리적 거리(300px)를 일정하게 유지하며 생성
+                if (this.spawnDistance >= 300) {
+                    this.spawnDistance = 0; // 거리 초기화
+                    
+                    // Randomize top pipe length
+                    // Min length 50, Max length = (total usable height - gap - min bottom length)
+                    let usableHeight = LOGICAL_HEIGHT - GROUND_HEIGHT;
+                    let minPipeHeight = 50;
+                    let maxTopLength = usableHeight - this.gap - minPipeHeight;
+                    
+                    // Add some randomness
+                    let randomTop = Math.floor(Math.random() * (maxTopLength - minPipeHeight + 1)) + minPipeHeight;
+                    
+                    this.items.push({
+                        x: LOGICAL_WIDTH,
+                        top: randomTop,
+                        shrimpEaten: false, // 새우를 먹었는지 추적
+                        shrimpY: 0
+                    });
+                }
+
+                for (let i = 0; i < this.items.length; i++) {
+                    let p = this.items[i];
+                    
+                    // Move pipe left
+                    p.x -= this.dx;
+                    
+                    // Collision Detection
+                    // Bird's bounding box (simplified to a square slightly smaller than the circle for leniency)
+                    let birdHitboxSize = bird.radius * 0.8; 
+                    
+                    // Check X overlap (기둥 충돌)
+                    if (bird.x + birdHitboxSize > p.x && bird.x - birdHitboxSize < p.x + this.width) {
+                        // Check Y overlap (hitting top pipe OR hitting bottom pipe)
+                        if (bird.y - birdHitboxSize < p.top || bird.y + birdHitboxSize > p.top + this.gap) {
+                            setGameOver('pipe');
+                        }
+                    }
+                    
+                    // Score Update: 새우 충돌 판정 (기둥 사이를 그냥 지나가지 않고 새우를 먹어야 점수 획득)
+                    if (!p.shrimpEaten) {
+                        let shrimpX = p.x + this.width / 2;
+                        let dx = bird.x - shrimpX;
+                        let dy = bird.y - p.shrimpY;
+                        let distance = Math.sqrt(dx * dx + dy * dy);
+                        
+                        // 새우의 반경(약 20) + 문어의 반경 이내로 들어오면 먹은 것으로 판정
+                        if (distance < bird.radius + 20) {
+                            p.shrimpEaten = true;
+                            score += 1;
+                            scoreDisplay.innerText = score;
+                            
+                            // 획득 시 점수가 커졌다 원래대로 돌아오는 팝(Pop) 애니메이션 효과
+                            scoreDisplay.style.transform = 'translateX(-50%) scale(1.5)';
+                            setTimeout(() => {
+                                scoreDisplay.style.transform = 'translateX(-50%) scale(1)';
+                            }, 150);
+                        }
+                    }
+
+                    // Remove pipes that have moved off screen
+                    if (p.x + this.width < 0) {
+                        this.items.shift();
+                        i--; // Adjust index since array shifted
+                    }
+                }
+            },
+            
+            reset: function() {
+                this.items = [];
+                this.dx = 3; // 게임 재시작 시 속도 초기화
+                this.spawnDistance = 300; // 게임 시작 시 즉시 첫 기둥이 나오도록 설정
+            }
+        };
+
+        // Handle Canvas Resizing to maintain aspect ratio while fitting screen
+        function resize() {
+            const container = document.getElementById('game-container');
+            const containerWidth = container.clientWidth;
+            const containerHeight = container.clientHeight;
+            
+            // Set actual canvas resolution to logical resolution for consistent rendering
+            canvas.width = LOGICAL_WIDTH;
+            canvas.height = LOGICAL_HEIGHT;
+            
+            // Calculate scale to fit canvas inside container css-wise
+            const scaleX = containerWidth / LOGICAL_WIDTH;
+            const scaleY = containerHeight / LOGICAL_HEIGHT;
+            
+            // We want it to stretch fully in this container setup, so we rely on CSS
+            // The canvas internal coordinates are 400x600, CSS handles the scaling.
+        }
+        
+        window.addEventListener('resize', resize);
+        
+        function drawBackground() {
+            // Fill Ocean Background (Gradient from light blue to deeper blue)
+            let grad = ctx.createLinearGradient(0, 0, 0, LOGICAL_HEIGHT);
+            grad.addColorStop(0, '#2eb5e5'); // Light teal near surface
+            grad.addColorStop(1, '#0b6691'); // Deeper blue at bottom
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+            
+            // Draw some bubbles (moving up slowly based on frames)
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+            ctx.lineWidth = 2;
+            
+            // Simple array of bubble positions to draw
+            const bubbles = [
+                {x: 50, yOffset: 0, size: 8},
+                {x: 120, yOffset: 200, size: 5},
+                {x: 250, yOffset: 100, size: 12},
+                {x: 350, yOffset: 300, size: 6}
+            ];
+
+            for(let b of bubbles) {
+                // Calculate moving Y position
+                let currentY = LOGICAL_HEIGHT - ((frames + b.yOffset) % LOGICAL_HEIGHT);
+                
+                ctx.beginPath();
+                ctx.arc(b.x + Math.sin(currentY * 0.05) * 5, currentY, b.size, 0, Math.PI*2);
+                ctx.fill();
+                ctx.stroke();
+            }
+
+            // Draw distant seaweed in background
+            ctx.fillStyle = '#228B22'; // Forest green
+            ctx.globalAlpha = 0.3; // Push to background
+            
+            // Draw wobbly seaweed
+            ctx.beginPath();
+            ctx.moveTo(80, LOGICAL_HEIGHT);
+            ctx.quadraticCurveTo(100 + Math.sin(frames * 0.02) * 15, LOGICAL_HEIGHT - 100, 80, LOGICAL_HEIGHT - 200);
+            ctx.quadraticCurveTo(60 + Math.sin(frames * 0.02) * 15, LOGICAL_HEIGHT - 300, 90, LOGICAL_HEIGHT - 350);
+            ctx.lineTo(110, LOGICAL_HEIGHT - 350);
+            ctx.quadraticCurveTo(80 + Math.sin(frames * 0.02) * 15, LOGICAL_HEIGHT - 300, 100, LOGICAL_HEIGHT - 100);
+            ctx.lineTo(100, LOGICAL_HEIGHT);
+            ctx.fill();
+            
+            ctx.beginPath();
+            ctx.moveTo(320, LOGICAL_HEIGHT);
+            ctx.quadraticCurveTo(300 + Math.cos(frames * 0.025) * 10, LOGICAL_HEIGHT - 150, 320, LOGICAL_HEIGHT - 250);
+            ctx.lineTo(340, LOGICAL_HEIGHT - 250);
+            ctx.quadraticCurveTo(320 + Math.cos(frames * 0.025) * 10, LOGICAL_HEIGHT - 150, 340, LOGICAL_HEIGHT);
+            ctx.fill();
+            
+            ctx.globalAlpha = 1.0; // Reset alpha
+        }
+
+        function gameLoop() {
+            // Clear canvas via redrawing background
+            drawBackground();
+            
+            if (currentState === STATE_START) {
+                // Just draw bird hovering
+                bird.y = (LOGICAL_HEIGHT / 2) + Math.sin(frames * 0.1) * 10; // Hover effect
+                bird.draw();
+            } 
+            else if (currentState === STATE_PLAYING) {
+                // Update entities
+                pipes.update();
+                bird.update();
+                
+                // Draw entities (Back to Front)
+                pipes.draw();
+                bird.draw();
+            }
+            else if (currentState === STATE_GAMEOVER) {
+                // 장애물은 멈춰있는 상태로 그림
+                pipes.draw();
+                
+                if (deathCause === 'pipe') {
+                    if (!bird.isEaten) {
+                        // 상어가 오기 전까지 제자리에서 덜덜 떨고 있는 아기 문어
+                        bird.y += Math.sin(frames * 0.5) * 1.5;
+                        bird.draw();
+                    }
+
+                    // 상어 애니메이션 로직
+                    if (shark.active) {
+                        shark.update();
+                        shark.draw();
+                    }
+
+                    // 상어가 완전히 화면 밖으로 나가면 게임 오버 화면 표시
+                    if (shark.isFinished && gameOverScreen.style.display !== 'flex') {
+                        gameOverScreen.style.display = 'flex';
+                        finalScoreDisplay.innerText = score;
+                    }
+                } else if (deathCause === 'floor') {
+                    // 바닥에 떨어졌을 때는 중력을 계속 적용해 화면 아래로 떨어지게 함
+                    bird.velocity += bird.gravity;
+                    bird.y += bird.velocity;
+                    bird.draw();
+
+                    // 문어가 화면 아래로 완전히 사라지면 게임 오버 화면 표시
+                    if (bird.y > LOGICAL_HEIGHT + bird.radius * 2 && gameOverScreen.style.display !== 'flex') {
+                        gameOverScreen.style.display = 'flex';
+                        finalScoreDisplay.innerText = score;
+                    }
+                }
+            }
+
+            // 프레임 업데이트 (모든 상태에서 배경/상어/꼬리 애니메이션이 작동하도록 바깥으로 뺌)
+            frames++;
+            animationId = requestAnimationFrame(gameLoop);
+        }
+
+        function startGame() {
+            currentState = STATE_PLAYING;
+            startScreen.style.display = 'none';
+            scoreDisplay.style.display = 'block';
+            score = 0;
+            scoreDisplay.innerText = score;
+            frames = 0;
+            bird.reset();
+            pipes.reset();
+            shark.reset(); // 상어 초기화
+            bird.jump(); // Initial jump
+        }
+
+        function setGameOver(cause) {
+            if (currentState !== STATE_GAMEOVER) {
+                currentState = STATE_GAMEOVER;
+                deathCause = cause;
+                scoreDisplay.style.display = 'none';
+                
+                if (cause === 'pipe') {
+                    // 상어 애니메이션 시작 설정 (기둥에 부딪혔을 때만)
+                    shark.reset();
+                    shark.y = bird.y; // 아기 문어의 Y 위치로 상어가 나타나도록 조준
+                    shark.active = true;
+                }
+                // 게임 오버 UI 표시는 애니메이션이 끝난 이후로 지연시킴
+            }
+        }
+
+        function restartGame() {
+            gameOverScreen.style.display = 'none';
+            // Go back to start screen to prepare
+            currentState = STATE_START;
+            startScreen.style.display = 'flex';
+            bird.reset();
+            pipes.reset();
+            shark.reset();
+        }
+
+        // Interaction handler (Mouse click, Touch, Spacebar)
+        function handleAction(e) {
+            // Prevent default behavior (like scrolling on spacebar or double tap zoom)
+            if(e.type !== 'mousedown') e.preventDefault(); 
+            
+            switch(currentState) {
+                case STATE_START:
+                    startGame();
+                    break;
+                case STATE_PLAYING:
+                    bird.jump();
+                    break;
+                case STATE_GAMEOVER:
+                    // 상어 애니메이션이 끝나고 게임 오버 화면이 나타났을 때만 재시작 허용
+                    if (gameOverScreen.style.display === 'flex') {
+                        restartGame();
+                    }
+                    break;
+            }
+        }
+
+        // Event Listeners
+        window.addEventListener('keydown', function(e) {
+            if (e.code === 'Space') {
+                handleAction(e);
+            }
+        });
+
+        // Add mouse/touch listeners to the container
+        const container = document.getElementById('game-container');
+        container.addEventListener('mousedown', handleAction);
+        container.addEventListener('touchstart', handleAction, {passive: false});
+
+
+        // Init
+        resize();
+        bird.reset();
+        requestAnimationFrame(gameLoop);
+
+    </script>
+</body>
+</html>
